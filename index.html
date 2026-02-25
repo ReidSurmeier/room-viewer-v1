@@ -192,30 +192,34 @@ const AVATAR_URLS = [
   'avatars/avatar9.gif',
 ];
 
-// Animated GIF textures via gifler — fetches GIF, drives frame timing itself
-const avatarTextures = [];
+// Lazy GIF texture loading — only fetch when a peer with that avatar joins
+const texCache = new Map();  // avatarIdx → CanvasTexture
 
-AVATAR_URLS.forEach(url => {
+function getOrLoadTex(idx) {
+  const key = idx % AVATAR_URLS.length;
+  if (texCache.has(key)) return texCache.get(key);
+
   const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  avatarTextures.push(tex);
+  texCache.set(key, tex);
 
-  // gifler fetches the GIF, parses frames, calls back with each frame
-  gifler(url).frames(canvas, (ctx, frame) => {
+  gifler(AVATAR_URLS[key]).frames(canvas, (ctx, frame) => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(frame.buffer, 0, 0);
-    tex.needsUpdate = true;  // tell Three.js to upload the new frame to GPU
+    tex.needsUpdate = true;
   });
-});
 
-function updateAvatarTextures() { /* gifler drives updates via its own timer */ }
+  return tex;
+}
+
+function updateAvatarTextures() { /* gifler drives its own timer */ }
 
 function addPeer(id, avatarIdx = 0) {
   if (peers.has(id) || id === MY_ID) return;
-  const tex    = avatarTextures[avatarIdx % avatarTextures.length];
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: tex, transparent: true, depthTest: true,
+    map: getOrLoadTex(avatarIdx), transparent: true, depthTest: true,
   }));
   sprite.scale.set(AVATAR_SCALE, AVATAR_SCALE, 1);
   scene.add(sprite);
