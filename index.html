@@ -38,9 +38,13 @@
   }
   #crosshair::before { width: 14px; height: 1px; top: 0; left: -7px; }
   #crosshair::after  { width: 1px; height: 14px; top: -7px; left: 0; }
+  /* GIF animation source images — tiny, barely visible, keeps browser animating them */
+  .avatar-src {
+    position: fixed; bottom: 0; right: 0;
+    width: 3px; height: 3px;
+    opacity: 0.01; pointer-events: none; z-index: -1;
+  }
 </style>
-<script src="https://cdn.ably.com/lib/ably.min-2.js"></script>
-<script src="https://unpkg.com/gifler@0.1.0/gifler.min.js"></script>
 </head>
 <body>
 
@@ -56,8 +60,9 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    "three":        "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "ably":         "https://esm.sh/ably@2"
   }
 }
 </script>
@@ -65,7 +70,8 @@
 <script type="module">
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFLoader }          from 'three/addons/loaders/GLTFLoader.js';
+import Ably                    from 'ably';
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -87,17 +93,9 @@ scene.add(controls.getObject());
 
 const overlay   = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
-
 overlay.addEventListener('click', () => controls.lock());
-
-controls.addEventListener('lock', () => {
-  overlay.classList.add('hidden');
-  crosshair.style.display = 'block';
-});
-controls.addEventListener('unlock', () => {
-  overlay.classList.remove('hidden');
-  crosshair.style.display = 'none';
-});
+controls.addEventListener('lock',   () => { overlay.classList.add('hidden');    crosshair.style.display = 'block'; });
+controls.addEventListener('unlock', () => { overlay.classList.remove('hidden'); crosshair.style.display = 'none';  });
 
 // ─── WASD ────────────────────────────────────────────────────────────────────
 const keys = {};
@@ -105,57 +103,40 @@ window.addEventListener('keydown', e => { keys[e.code] = true; });
 window.addEventListener('keyup',   e => { keys[e.code] = false; });
 
 const vel = { fwd: 0, right: 0, up: 0 };
-const MAX_SPEED = 0.55;   // units/sec — lower = slower
-const ACCEL     = 5.0;    // how fast velocity ramps up/down (higher = snappier)
+const MAX_SPEED = 0.55;
+const ACCEL     = 5.0;
 
 function updateMovement(dt) {
   if (!controls.isLocked) return;
-
-  const tFwd   = (keys['KeyW'] || keys['ArrowUp'])    ?  MAX_SPEED
-               : (keys['KeyS'] || keys['ArrowDown'])  ? -MAX_SPEED : 0;
-  const tRight = (keys['KeyD'] || keys['ArrowRight']) ?  MAX_SPEED
-               : (keys['KeyA'] || keys['ArrowLeft'])  ? -MAX_SPEED : 0;
-  const tUp    = (keys['KeyE'] || keys['Space'])       ?  MAX_SPEED
-               : (keys['KeyQ'] || keys['ShiftLeft'])   ? -MAX_SPEED : 0;
-
-  // Lerp velocity toward target — gives smooth acceleration & deceleration
+  const tFwd   = keys['KeyW']||keys['ArrowUp']    ?  MAX_SPEED : keys['KeyS']||keys['ArrowDown']  ? -MAX_SPEED : 0;
+  const tRight = keys['KeyD']||keys['ArrowRight'] ?  MAX_SPEED : keys['KeyA']||keys['ArrowLeft']  ? -MAX_SPEED : 0;
+  const tUp    = keys['KeyE']||keys['Space']       ?  MAX_SPEED : keys['KeyQ']||keys['ShiftLeft']  ? -MAX_SPEED : 0;
   const t = Math.min(ACCEL * dt, 1);
   vel.fwd   += (tFwd   - vel.fwd)   * t;
   vel.right += (tRight - vel.right) * t;
   vel.up    += (tUp    - vel.up)    * t;
-
   controls.moveForward(vel.fwd   * dt);
   controls.moveRight(vel.right   * dt);
-  camera.position.y += vel.up    * dt;
+  camera.position.y += vel.up * dt;
 }
 
 // ─── Load GLB ────────────────────────────────────────────────────────────────
 const loading = document.getElementById('loading');
-
 new GLTFLoader().load('room_segmented.glb', (gltf) => {
-  const root = gltf.scene;
-  const box  = new THREE.Box3().setFromObject(root);
+  const root   = gltf.scene;
+  const box    = new THREE.Box3().setFromObject(root);
   const center = box.getCenter(new THREE.Vector3());
   const size   = box.getSize(new THREE.Vector3());
   root.position.sub(center);
-
-  // Start inside, roughly at eye height
   camera.position.set(0, size.y * 0.05, 0);
 
-  root.traverse((child) => {
+  root.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return;
-
-    // MeshBasicMaterial — vertex colors only, no lighting = no distant blackout
-    child.material = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      side: THREE.DoubleSide,
-    });
-
-    // Thin wireframe edge overlay
-    const edges = new THREE.EdgesGeometry(child.geometry, 15);
-    child.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
-      color: 0x2a2520, transparent: true, opacity: 0.35, depthTest: true,
-    })));
+    child.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    child.add(new THREE.LineSegments(
+      new THREE.EdgesGeometry(child.geometry, 15),
+      new THREE.LineBasicMaterial({ color: 0x2a2520, transparent: true, opacity: 0.35 })
+    ));
   });
 
   scene.add(root);
@@ -171,51 +152,50 @@ window.addEventListener('resize', () => {
 });
 
 // ─── Multiplayer (Ably) ──────────────────────────────────────────────────────
-const ABLY_KEY    = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
-const AVATAR_SCALE = 0.08;  // small — world units
-const MY_ID       = Math.random().toString(36).slice(2, 8);
-const MY_AVATAR   = Math.floor(Math.random() * 10);  // random avatar on load
-const peers       = new Map();   // id → sprite
-let   ablyChannel = null;
-let   lastSend    = 0;
+const ABLY_KEY     = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
+const AVATAR_SCALE = 0.08;
+const MY_ID        = Math.random().toString(36).slice(2, 8);
+const MY_AVATAR    = Math.floor(Math.random() * 10);
+const peers        = new Map();
+let   ablyChannel  = null;
+let   lastSend     = 0;
 
-const AVATAR_URLS = [
-  'avatars/avatar0.gif',
-  'avatars/avatar1.gif',
-  'avatars/avatar2.gif',
-  'avatars/avatar3.gif',
-  'avatars/avatar4.gif',
-  'avatars/avatar5.gif',
-  'avatars/avatar6.gif',
-  'avatars/avatar7.gif',
-  'avatars/avatar8.gif',
-  'avatars/avatar9.gif',
-];
+const AVATAR_URLS = Array.from({ length: 10 }, (_, i) => `avatars/avatar${i}.gif`);
 
-// Lazy GIF texture loading — only fetch when a peer with that avatar joins
-const texCache = new Map();  // avatarIdx → CanvasTexture
+// ─── Animated GIF textures ───────────────────────────────────────────────────
+// Tiny visible <img> elements (opacity 0.01) keep the browser animating GIFs.
+// drawImage() samples the current frame each render call.
+const texCache    = new Map();  // idx → { img, canvas, ctx, tex }
 
 function getOrLoadTex(idx) {
   const key = idx % AVATAR_URLS.length;
-  if (texCache.has(key)) return texCache.get(key);
+  if (texCache.has(key)) return texCache.get(key).tex;
+
+  const img = document.createElement('img');
+  img.src = AVATAR_URLS[key];
+  img.className = 'avatar-src';
+  document.body.appendChild(img);
 
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d');
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  texCache.set(key, tex);
 
-  gifler(AVATAR_URLS[key]).frames(canvas, (ctx, frame) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(frame.buffer, 0, 0);
-    tex.needsUpdate = true;
-  });
-
+  texCache.set(key, { img, canvas, ctx, tex });
   return tex;
 }
 
-function updateAvatarTextures() { /* gifler drives its own timer */ }
+function updateAvatarTextures() {
+  texCache.forEach(({ img, canvas, ctx, tex }) => {
+    if (!img.naturalWidth) return;
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.drawImage(img, 0, 0, 128, 128);
+    tex.needsUpdate = true;
+  });
+}
 
+// ─── Peer helpers ────────────────────────────────────────────────────────────
 function addPeer(id, avatarIdx = 0) {
   if (peers.has(id) || id === MY_ID) return;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -225,31 +205,28 @@ function addPeer(id, avatarIdx = 0) {
   scene.add(sprite);
   peers.set(id, sprite);
 }
-
 function removePeer(id) {
   const s = peers.get(id);
   if (s) { scene.remove(s); peers.delete(id); }
 }
-
-function movePeer(id, x, y, z, avatarIdx) {
+function movePeer(id, x, y, z, av) {
   if (id === MY_ID) return;
-  if (!peers.has(id)) addPeer(id, avatarIdx);
+  if (!peers.has(id)) addPeer(id, av);
   const s = peers.get(id);
   if (s) s.position.set(x, y, z);
 }
 
+// ─── Ably init ───────────────────────────────────────────────────────────────
 function publishPosition() {
   if (!ablyChannel || !controls.isLocked) return;
   const now = performance.now();
   if (now - lastSend < 80) return;
   lastSend = now;
-  ablyChannel.publish('move', {
-    id: MY_ID, av: MY_AVATAR,
-    x: camera.position.x, y: camera.position.y, z: camera.position.z,
-  });
+  ablyChannel.publish('move', { id: MY_ID, av: MY_AVATAR,
+    x: camera.position.x, y: camera.position.y, z: camera.position.z });
 }
 
-(function initAbly() {
+try {
   const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: MY_ID });
   ablyChannel = ably.channels.get('room-presence');
   ablyChannel.subscribe('move', msg => {
@@ -260,12 +237,12 @@ function publishPosition() {
   ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
   ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
   ablyChannel.presence.get((err, members) => {
-    if (!err) members.forEach(m => {
-      if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0);
-    });
+    if (!err) members.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0); });
   });
   ablyChannel.presence.enter({ av: MY_AVATAR });
-})();
+} catch (e) {
+  console.warn('Ably init failed:', e);
+}
 
 // ─── Render loop ─────────────────────────────────────────────────────────────
 let last = performance.now();
@@ -279,7 +256,6 @@ function animate() {
   updateAvatarTextures();
   renderer.render(scene, camera);
 }
-
 animate();
 </script>
 </body>
