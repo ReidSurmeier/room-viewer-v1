@@ -26,28 +26,23 @@
     font: 13px/2.2 system-ui, sans-serif;
     backdrop-filter: blur(10px); border-radius: 6px;
   }
-  #overlay-box h2 { font-size: 20px; font-weight: 400; margin-bottom: 6px; letter-spacing: 0.03em; }
+  #overlay-box h2 { font-size: 20px; font-weight: 400; margin-bottom: 6px; }
   #overlay-box p  { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
-  #crosshair {
-    position: fixed; top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none; display: none;
-  }
-  #crosshair::before, #crosshair::after {
-    content: ''; position: absolute; background: rgba(255,255,255,0.75);
-  }
-  #crosshair::before { width: 14px; height: 1px; top: 0; left: -7px; }
-  #crosshair::after  { width: 1px; height: 14px; top: -7px; left: 0; }
-  /* GIF animation source images — tiny, barely visible, keeps browser animating them */
-  .avatar-src {
-    position: fixed; bottom: 0; right: 0;
-    width: 3px; height: 3px;
-    opacity: 0.01; pointer-events: none; z-index: -1;
+  #crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); pointer-events: none; display: none; }
+  #crosshair::before, #crosshair::after { content:''; position:absolute; background:rgba(255,255,255,0.75); }
+  #crosshair::before { width:14px; height:1px; top:0; left:-7px; }
+  #crosshair::after  { width:1px; height:14px; top:-7px; left:0; }
+  /* My own avatar preview — bottom left, confirms GIFs are working */
+  #my-avatar {
+    position: fixed; bottom: 16px; left: 16px;
+    width: 48px; height: 48px;
+    border-radius: 4px; z-index: 20;
+    image-rendering: pixelated;
+    opacity: 0.85;
   }
 </style>
 </head>
 <body>
-
 <div id="loading"></div>
 <div id="overlay">
   <div id="overlay-box">
@@ -56,13 +51,15 @@
   </div>
 </div>
 <div id="crosshair"></div>
+<!-- Your own avatar shown bottom-left so you can verify GIFs work -->
+<img id="my-avatar" src="" alt="">
 
 <script type="importmap">
 {
   "imports": {
-    "three":        "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-    "ably":         "https://esm.sh/ably@2"
+    "three":         "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "ably":          "https://esm.sh/ably@2"
   }
 }
 </script>
@@ -80,17 +77,14 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-// ─── Scene ───────────────────────────────────────────────────────────────────
-const scene = new THREE.Scene();
+// ─── Scene / Camera ──────────────────────────────────────────────────────────
+const scene  = new THREE.Scene();
 scene.background = new THREE.Color(0xf5efe6);
-
-// ─── Camera ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.001, 300);
 
 // ─── FPS Controls ────────────────────────────────────────────────────────────
 const controls = new PointerLockControls(camera, document.body);
 scene.add(controls.getObject());
-
 const overlay   = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
 overlay.addEventListener('click', () => controls.lock());
@@ -101,127 +95,134 @@ controls.addEventListener('unlock', () => { overlay.classList.remove('hidden'); 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; });
 window.addEventListener('keyup',   e => { keys[e.code] = false; });
-
 const vel = { fwd: 0, right: 0, up: 0 };
-const MAX_SPEED = 0.55;
-const ACCEL     = 5.0;
-
+const MAX_SPEED = 0.55, ACCEL = 5.0;
 function updateMovement(dt) {
   if (!controls.isLocked) return;
-  const tFwd   = keys['KeyW']||keys['ArrowUp']    ?  MAX_SPEED : keys['KeyS']||keys['ArrowDown']  ? -MAX_SPEED : 0;
-  const tRight = keys['KeyD']||keys['ArrowRight'] ?  MAX_SPEED : keys['KeyA']||keys['ArrowLeft']  ? -MAX_SPEED : 0;
-  const tUp    = keys['KeyE']||keys['Space']       ?  MAX_SPEED : keys['KeyQ']||keys['ShiftLeft']  ? -MAX_SPEED : 0;
+  const tF = keys['KeyW']||keys['ArrowUp']    ?  MAX_SPEED : keys['KeyS']||keys['ArrowDown']  ? -MAX_SPEED : 0;
+  const tR = keys['KeyD']||keys['ArrowRight'] ?  MAX_SPEED : keys['KeyA']||keys['ArrowLeft']  ? -MAX_SPEED : 0;
+  const tU = keys['KeyE']||keys['Space']       ?  MAX_SPEED : keys['KeyQ']||keys['ShiftLeft']  ? -MAX_SPEED : 0;
   const t = Math.min(ACCEL * dt, 1);
-  vel.fwd   += (tFwd   - vel.fwd)   * t;
-  vel.right += (tRight - vel.right) * t;
-  vel.up    += (tUp    - vel.up)    * t;
+  vel.fwd   += (tF - vel.fwd)   * t;
+  vel.right += (tR - vel.right) * t;
+  vel.up    += (tU - vel.up)    * t;
   controls.moveForward(vel.fwd   * dt);
   controls.moveRight(vel.right   * dt);
   camera.position.y += vel.up * dt;
 }
 
-// ─── Load GLB ────────────────────────────────────────────────────────────────
+// ─── Load room ───────────────────────────────────────────────────────────────
 const loading = document.getElementById('loading');
 new GLTFLoader().load('room_segmented.glb', (gltf) => {
-  const root   = gltf.scene;
-  const box    = new THREE.Box3().setFromObject(root);
-  const center = box.getCenter(new THREE.Vector3());
-  const size   = box.getSize(new THREE.Vector3());
-  root.position.sub(center);
-  camera.position.set(0, size.y * 0.05, 0);
-
-  root.traverse(child => {
-    if (!(child instanceof THREE.Mesh)) return;
-    child.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    child.add(new THREE.LineSegments(
-      new THREE.EdgesGeometry(child.geometry, 15),
+  const root = gltf.scene;
+  const box  = new THREE.Box3().setFromObject(root);
+  root.position.sub(box.getCenter(new THREE.Vector3()));
+  camera.position.set(0, box.getSize(new THREE.Vector3()).y * 0.05, 0);
+  root.traverse(c => {
+    if (!(c instanceof THREE.Mesh)) return;
+    c.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    c.add(new THREE.LineSegments(
+      new THREE.EdgesGeometry(c.geometry, 15),
       new THREE.LineBasicMaterial({ color: 0x2a2520, transparent: true, opacity: 0.35 })
     ));
   });
-
   scene.add(root);
   loading.classList.add('fade');
   setTimeout(() => loading.style.display = 'none', 1300);
 });
 
-// ─── Resize ──────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// ─── Multiplayer (Ably) ──────────────────────────────────────────────────────
+// ─── Animated GIF textures (ImageDecoder API) ─────────────────────────────
+// Falls back to static img for unsupported browsers (Safari)
+const AVATAR_URLS = Array.from({ length: 10 }, (_, i) => `avatars/avatar${i}.gif`);
+const texCache    = new Map();   // key → THREE.CanvasTexture
+
+async function loadGIF(key) {
+  if (texCache.has(key)) return texCache.get(key);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  texCache.set(key, tex);   // store immediately so duplicate calls don't double-load
+
+  const url = AVATAR_URLS[key % AVATAR_URLS.length];
+
+  try {
+    const blob = await fetch(url).then(r => r.blob());
+
+    if (typeof ImageDecoder !== 'undefined') {
+      // ── Native frame-accurate GIF animation ──────────────────────────────
+      const decoder = new ImageDecoder({ data: blob.stream(), type: 'image/gif' });
+      await decoder.tracks.ready;
+      const frameCount = decoder.tracks.selectedTrack.frameCount;
+      let fi = 0;
+
+      const ctx = canvas.getContext('2d');
+      async function nextFrame() {
+        try {
+          const { image } = await decoder.decode({ frameIndex: fi % frameCount });
+          if (canvas.width !== image.displayWidth)  canvas.width  = image.displayWidth;
+          if (canvas.height !== image.displayHeight) canvas.height = image.displayHeight;
+          ctx.drawImage(image, 0, 0);
+          const delay = (image.duration ?? 100000) / 1000;  // microseconds → ms
+          image.close();
+          tex.needsUpdate = true;
+          fi++;
+          setTimeout(nextFrame, Math.max(delay, 20));
+        } catch { fi = 0; setTimeout(nextFrame, 100); }
+      }
+      nextFrame();
+
+    } else {
+      // ── Fallback: blob URL img (static first frame in Safari) ─────────────
+      const src = URL.createObjectURL(blob);
+      const img = new Image();
+      img.src = src;
+      await new Promise(r => img.onload = r);
+      canvas.getContext('2d').drawImage(img, 0, 0, 128, 128);
+      tex.needsUpdate = true;
+    }
+  } catch (e) { console.warn('Avatar load failed', key, e); }
+
+  return tex;
+}
+
+// ─── Multiplayer ─────────────────────────────────────────────────────────────
 const ABLY_KEY     = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
 const AVATAR_SCALE = 0.08;
 const MY_ID        = Math.random().toString(36).slice(2, 8);
 const MY_AVATAR    = Math.floor(Math.random() * 10);
 const peers        = new Map();
-let   ablyChannel  = null;
-let   lastSend     = 0;
+let   ablyChannel  = null, lastSend = 0;
 
-const AVATAR_URLS = Array.from({ length: 10 }, (_, i) => `avatars/avatar${i}.gif`);
+// Show your own avatar in the corner
+document.getElementById('my-avatar').src = AVATAR_URLS[MY_AVATAR];
 
-// ─── Animated GIF textures ───────────────────────────────────────────────────
-// Tiny visible <img> elements (opacity 0.01) keep the browser animating GIFs.
-// drawImage() samples the current frame each render call.
-const texCache    = new Map();  // idx → { img, canvas, ctx, tex }
-
-function getOrLoadTex(idx) {
-  const key = idx % AVATAR_URLS.length;
-  if (texCache.has(key)) return texCache.get(key).tex;
-
-  const img = document.createElement('img');
-  img.src = AVATAR_URLS[key];
-  img.className = 'avatar-src';
-  document.body.appendChild(img);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-
-  texCache.set(key, { img, canvas, ctx, tex });
-  return tex;
-}
-
-function updateAvatarTextures() {
-  texCache.forEach(({ img, canvas, ctx, tex }) => {
-    if (!img.naturalWidth) return;
-    ctx.clearRect(0, 0, 128, 128);
-    ctx.drawImage(img, 0, 0, 128, 128);
-    tex.needsUpdate = true;
-  });
-}
-
-// ─── Peer helpers ────────────────────────────────────────────────────────────
-function addPeer(id, avatarIdx = 0) {
+async function addPeer(id, av = 0) {
   if (peers.has(id) || id === MY_ID) return;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: getOrLoadTex(avatarIdx), transparent: true, depthTest: true,
-  }));
+  const mat    = new THREE.SpriteMaterial({ transparent: true, depthTest: true });
+  const sprite = new THREE.Sprite(mat);
   sprite.scale.set(AVATAR_SCALE, AVATAR_SCALE, 1);
   scene.add(sprite);
   peers.set(id, sprite);
+  const tex = await loadGIF(av % AVATAR_URLS.length);
+  mat.map = tex; mat.needsUpdate = true;
 }
-function removePeer(id) {
-  const s = peers.get(id);
-  if (s) { scene.remove(s); peers.delete(id); }
-}
+function removePeer(id) { const s = peers.get(id); if (s) { scene.remove(s); peers.delete(id); } }
 function movePeer(id, x, y, z, av) {
   if (id === MY_ID) return;
   if (!peers.has(id)) addPeer(id, av);
-  const s = peers.get(id);
-  if (s) s.position.set(x, y, z);
+  const s = peers.get(id); if (s) s.position.set(x, y, z);
 }
-
-// ─── Ably init ───────────────────────────────────────────────────────────────
-function publishPosition() {
+function publishPos() {
   if (!ablyChannel || !controls.isLocked) return;
-  const now = performance.now();
-  if (now - lastSend < 80) return;
-  lastSend = now;
+  const now = performance.now(); if (now - lastSend < 80) return; lastSend = now;
   ablyChannel.publish('move', { id: MY_ID, av: MY_AVATAR,
     x: camera.position.x, y: camera.position.y, z: camera.position.z });
 }
@@ -229,31 +230,22 @@ function publishPosition() {
 try {
   const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: MY_ID });
   ablyChannel = ably.channels.get('room-presence');
-  ablyChannel.subscribe('move', msg => {
-    const d = msg.data;
-    movePeer(d.id, d.x, d.y, d.z, d.av ?? 0);
-  });
+  ablyChannel.subscribe('move', msg => { const d = msg.data; movePeer(d.id, d.x, d.y, d.z, d.av ?? 0); });
   ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId, m.data?.av ?? 0));
   ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
   ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
-  ablyChannel.presence.get((err, members) => {
-    if (!err) members.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0); });
-  });
+  ablyChannel.presence.get((e, ms) => { if (!e) ms.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0); }); });
   ablyChannel.presence.enter({ av: MY_AVATAR });
-} catch (e) {
-  console.warn('Ably init failed:', e);
-}
+} catch (e) { console.warn('Ably:', e); }
 
 // ─── Render loop ─────────────────────────────────────────────────────────────
 let last = performance.now();
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
-  const dt  = Math.min((now - last) / 1000, 0.05);
-  last = now;
+  const dt  = Math.min((now - last) / 1000, 0.05); last = now;
   updateMovement(dt);
-  publishPosition();
-  updateAvatarTextures();
+  publishPos();
   renderer.render(scene, camera);
 }
 animate();
