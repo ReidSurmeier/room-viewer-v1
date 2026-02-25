@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Room</title>
+<title>Room v1</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -22,11 +22,23 @@
     transition: opacity 1.2s ease;
   }
   #loading.fade { opacity: 0; pointer-events: none; }
+  #wasd-hint {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(80,70,60,0.45);
+    font: 12px/1.6 system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    user-select: none;
+  }
 </style>
 </head>
 <body>
 
 <div id="loading"></div>
+<div id="wasd-hint">WASD — move &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; scroll — zoom</div>
 
 <script type="importmap">
 {
@@ -42,10 +54,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as TWEEN from 'tween';
 
 // ─── Metadata ────────────────────────────────────────────────────────────────
@@ -69,7 +77,7 @@ document.body.appendChild(renderer.domElement);
 
 // ─── Scene ───────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf5efe6); // warm cream, not pure white
+scene.background = new THREE.Color(0xf5efe6);
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.001, 100);
@@ -83,59 +91,59 @@ controls.minDistance = 0.05;
 controls.maxDistance = 6;
 controls.target.set(0, 0, 0);
 controls.enabled = false;
-// Prevent flipping upside down
-controls.maxPolarAngle = Math.PI * 0.85;
-controls.minPolarAngle = Math.PI * 0.1;
+controls.maxPolarAngle = Math.PI * 0.95;
+controls.minPolarAngle = Math.PI * 0.05;
 
-// ─── Lighting — warm, directional, Backflip-style ───────────────────────────
-// High ambient for flat fill, but not so high it kills dimensionality
+// ─── WASD Movement ───────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
+
+const _fwd   = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _up    = new THREE.Vector3(0, 1, 0);
+const _move  = new THREE.Vector3();
+
+function updateWASD() {
+  if (currentState !== State.ROOM) return;
+  const speed = 0.018;
+  camera.getWorldDirection(_fwd);
+  _fwd.y = 0; _fwd.normalize();
+  _right.crossVectors(_fwd, _up).normalize();
+
+  _move.set(0, 0, 0);
+  if (keys['w'] || keys['arrowup'])    _move.addScaledVector(_fwd,    1);
+  if (keys['s'] || keys['arrowdown'])  _move.addScaledVector(_fwd,   -1);
+  if (keys['a'] || keys['arrowleft'])  _move.addScaledVector(_right, -1);
+  if (keys['d'] || keys['arrowright']) _move.addScaledVector(_right,  1);
+  if (keys['e'])                       _move.addScaledVector(_up,     1);
+  if (keys['q'])                       _move.addScaledVector(_up,    -1);
+
+  if (_move.length() > 0) {
+    _move.normalize().multiplyScalar(speed);
+    camera.position.add(_move);
+    controls.target.add(_move);
+  }
+}
+
+// ─── Lighting ────────────────────────────────────────────────────────────────
 const ambient = new THREE.AmbientLight(0xfff5e8, 0.6);
 scene.add(ambient);
-
-// Hemisphere light: warm sky, cool ground bounce
 const hemi = new THREE.HemisphereLight(0xfff4e0, 0xd4c8b8, 0.4);
 scene.add(hemi);
-
-// Key: warm directional (window light)
 const sun = new THREE.DirectionalLight(0xfff0d4, 1.0);
 sun.position.set(-2, 3, 3);
-sun.castShadow = false;
 scene.add(sun);
-
-// Fill: cooler, from opposite
 const fill = new THREE.DirectionalLight(0xe8eeff, 0.3);
 fill.position.set(3, 1, -2);
 scene.add(fill);
-
-// Warm backlight
 const back = new THREE.DirectionalLight(0xffe8c4, 0.15);
 back.position.set(0, 2, -4);
 scene.add(back);
 
-// ─── Post-processing (SSAO for depth) ────────────────────────────────────────
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-
-// SAO (Scalable Ambient Obscurance) for subtle contact shadows
-const saoPass = new SAOPass(scene, camera);
-saoPass.params.saoBias = 0.5;
-saoPass.params.saoIntensity = 0.012;
-saoPass.params.saoScale = 3;
-saoPass.params.saoKernelRadius = 30;
-saoPass.params.saoMinResolution = 0;
-saoPass.params.saoBlur = true;
-saoPass.params.saoBlurRadius = 8;
-saoPass.params.saoBlurStdDev = 4;
-saoPass.params.saoBlurDepthCutoff = 0.01;
-composer.addPass(saoPass);
-
-composer.addPass(new OutputPass());
-
-// ─── Mouse tracking ─────────────────────────────────────────────────────────
-const mouse = { x: 0, y: 0, nx: 0, ny: 0 };
+// ─── Mouse tracking ──────────────────────────────────────────────────────────
+const mouse = { nx: 0, ny: 0 };
 window.addEventListener('mousemove', (e) => {
-  mouse.x = e.clientX;
-  mouse.y = e.clientY;
   mouse.nx = (e.clientX / innerWidth) * 2 - 1;
   mouse.ny = -(e.clientY / innerHeight) * 2 + 1;
 });
@@ -158,15 +166,11 @@ async function init() {
     const resp = await fetch('metadata.json');
     const metaArray = await resp.json();
     for (const m of metaArray) objectMeta[m.name] = m;
-  } catch (e) {
-    console.warn('No metadata.json');
-  }
+  } catch (e) { /* no metadata */ }
 
   const loader = new GLTFLoader();
   loader.load('room_segmented.glb', (gltf) => {
     const root = gltf.scene;
-
-    // Center mesh at origin
     const box = new THREE.Box3().setFromObject(root);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -174,7 +178,6 @@ async function init() {
 
     root.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
-
       const name = child.name;
       const meta = objectMeta[name] || {};
       const isPickable = meta.type === 'pickable';
@@ -182,7 +185,6 @@ async function init() {
       const wireOpacity = meta.wireframe_opacity ?? 0.5;
       const fillOpacity = meta.fill_opacity ?? 1.0;
 
-      // Material — vertex colors with Lambert for light response
       const mat = new THREE.MeshLambertMaterial({
         vertexColors: true,
         side: THREE.DoubleSide,
@@ -191,21 +193,14 @@ async function init() {
       });
       child.material = mat;
 
-      // Wireframe overlay — THIN lines, variable opacity
-      // EdgesGeometry for crease-line look (not every triangle)
-      const edgeThreshold = wireStyle === 'wireframe_only' ? 1 : 
-                            wireStyle === 'strong' ? 10 : 
+      const edgeThreshold = wireStyle === 'wireframe_only' ? 1 :
+                            wireStyle === 'strong' ? 10 :
                             wireStyle === 'medium' ? 15 : 25;
       const edges = new THREE.EdgesGeometry(child.geometry, edgeThreshold);
-      
-      // Backflip uses thin dark lines — not pure black, slightly warm
       const wireColor = wireStyle === 'wireframe_only' ? 0x1a1a1a : 0x2a2520;
       const edgeMat = new THREE.LineBasicMaterial({
-        color: wireColor,
-        transparent: true,
-        opacity: wireOpacity,
-        depthTest: true,
-        linewidth: 1, // Note: most WebGL implementations cap at 1
+        color: wireColor, transparent: true, opacity: wireOpacity,
+        depthTest: true, linewidth: 1,
       });
       const wireframe = new THREE.LineSegments(edges, edgeMat);
       child.add(wireframe);
@@ -214,29 +209,21 @@ async function init() {
         meta, wireframe, originalMaterial: mat, originalEdgeMat: edgeMat,
         originalOpacity: wireOpacity, originalWireColor: wireColor, isPickable,
       });
-
       if (isPickable) pickableMeshes.push(child);
     });
 
     scene.add(root);
-
-    // Camera: inside the room, human eye level, looking across
-    // After fix: Y is up (height ~1.33), X is width (~1.74), Z is depth (~2.15)
-    // Place camera at ~eye height, slightly off-center, looking across the room
     roomPos.set(size.x * 0.15, size.y * 0.15, size.z * 0.2);
     roomTarget.set(-size.x * 0.1, -size.y * 0.05, -size.z * 0.15);
-
-    startLoadingReveal();
+    startLoadingReveal(size);
   });
 }
 
-function startLoadingReveal() {
-  // Start from elevated exterior view
+function startLoadingReveal(size) {
   const startCamPos = { x: 2.5, y: 1.8, z: 2.5 };
-  const endCamPos = { x: roomPos.x, y: roomPos.y, z: roomPos.z };
-
+  const endCamPos   = { x: roomPos.x, y: roomPos.y, z: roomPos.z };
   const startTarget = { x: 0, y: 0.5, z: 0 };
-  const endTarget = { x: roomTarget.x, y: roomTarget.y, z: roomTarget.z };
+  const endTarget   = { x: roomTarget.x, y: roomTarget.y, z: roomTarget.z };
 
   camera.position.set(startCamPos.x, startCamPos.y, startCamPos.z);
   controls.target.set(startTarget.x, startTarget.y, startTarget.z);
@@ -247,30 +234,23 @@ function startLoadingReveal() {
   }, 300);
 
   new TWEEN.Tween(startCamPos)
-    .to(endCamPos, 3200)
-    .easing(TWEEN.Easing.Exponential.Out)
+    .to(endCamPos, 3200).easing(TWEEN.Easing.Exponential.Out)
     .onUpdate(() => camera.position.set(startCamPos.x, startCamPos.y, startCamPos.z))
     .start();
 
   new TWEEN.Tween(startTarget)
-    .to(endTarget, 3200)
-    .easing(TWEEN.Easing.Exponential.Out)
+    .to(endTarget, 3200).easing(TWEEN.Easing.Exponential.Out)
     .onUpdate(() => controls.target.set(startTarget.x, startTarget.y, startTarget.z))
-    .onComplete(() => {
-      currentState = State.ROOM;
-      controls.enabled = true;
-    })
+    .onComplete(() => { currentState = State.ROOM; controls.enabled = true; })
     .start();
 }
 
 // ─── Hover ───────────────────────────────────────────────────────────────────
 function updateHover() {
   if (currentState !== State.ROOM) return;
-
   raycaster.setFromCamera({ x: mouse.nx, y: mouse.ny }, camera);
   const intersects = raycaster.intersectObjects(pickableMeshes, false);
   let newHover = intersects.length > 0 ? intersects[0].object : null;
-
   if (newHover !== hoveredMesh) {
     if (hoveredMesh && allMeshData.has(hoveredMesh)) {
       const d = allMeshData.get(hoveredMesh);
@@ -280,7 +260,6 @@ function updateHover() {
     }
     if (newHover && allMeshData.has(newHover)) {
       const d = allMeshData.get(newHover);
-      // Brighten wireframe on hover — warm highlight
       d.wireframe.material.color.setHex(0x665544);
       d.wireframe.material.opacity = Math.min(1.0, d.originalOpacity + 0.35);
       d.wireframe.material.needsUpdate = true;
@@ -290,7 +269,7 @@ function updateHover() {
   }
 }
 
-// ─── Click interaction ───────────────────────────────────────────────────────
+// ─── Click ───────────────────────────────────────────────────────────────────
 window.addEventListener('click', (e) => {
   if (currentState === State.LOADING) return;
   if (currentState === State.INSPECT) { putDownObject(); return; }
@@ -301,43 +280,24 @@ function pickUpObject(mesh) {
   currentState = State.INSPECT;
   inspectedObject = mesh;
   mesh.getWorldPosition(inspectedOriginalPos);
-
-  // Position in front of camera
   const camDir = new THREE.Vector3();
   camera.getWorldDirection(camDir);
-  
-  // Distance based on object size
   const objBox = new THREE.Box3().setFromObject(mesh);
   const objSize = objBox.getSize(new THREE.Vector3());
-  const maxDim = Math.max(objSize.x, objSize.y, objSize.z);
-  const dist = Math.max(0.3, maxDim * 2.5);
-  
+  const dist = Math.max(0.3, Math.max(objSize.x, objSize.y, objSize.z) * 2.5);
   const inspectPos = camera.position.clone().add(camDir.multiplyScalar(dist));
-
   const worldPos = new THREE.Vector3();
   mesh.getWorldPosition(worldPos);
   const startPos = { x: worldPos.x, y: worldPos.y, z: worldPos.z };
-  const endPos = { x: inspectPos.x, y: inspectPos.y, z: inspectPos.z };
-
+  const endPos   = { x: inspectPos.x, y: inspectPos.y, z: inspectPos.z };
   inspectedOriginalParent = mesh.parent;
   scene.attach(mesh);
-
-  new TWEEN.Tween(startPos)
-    .to(endPos, 800)
-    .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => mesh.position.set(startPos.x, startPos.y, startPos.z))
-    .start();
-
+  new TWEEN.Tween(startPos).to(endPos, 800).easing(TWEEN.Easing.Quintic.InOut)
+    .onUpdate(() => mesh.position.set(startPos.x, startPos.y, startPos.z)).start();
   const ct = { x: controls.target.x, y: controls.target.y, z: controls.target.z };
-  new TWEEN.Tween(ct)
-    .to(endPos, 800)
-    .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => controls.target.set(ct.x, ct.y, ct.z))
-    .start();
-
-  controls.minDistance = 0.02;
-  controls.maxDistance = 1.5;
-
+  new TWEEN.Tween(ct).to(endPos, 800).easing(TWEEN.Easing.Quintic.InOut)
+    .onUpdate(() => controls.target.set(ct.x, ct.y, ct.z)).start();
+  controls.minDistance = 0.02; controls.maxDistance = 1.5;
   if (allMeshData.has(mesh)) {
     const d = allMeshData.get(mesh);
     d.wireframe.material.color.setHex(0x332d28);
@@ -350,13 +310,9 @@ function pickUpObject(mesh) {
 function putDownObject() {
   if (!inspectedObject) return;
   const mesh = inspectedObject;
-
   const cur = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
   const ret = { x: inspectedOriginalPos.x, y: inspectedOriginalPos.y, z: inspectedOriginalPos.z };
-
-  new TWEEN.Tween(cur)
-    .to(ret, 1000)
-    .easing(TWEEN.Easing.Quintic.InOut)
+  new TWEEN.Tween(cur).to(ret, 1000).easing(TWEEN.Easing.Quintic.InOut)
     .onUpdate(() => mesh.position.set(cur.x, cur.y, cur.z))
     .onComplete(() => {
       if (inspectedOriginalParent) inspectedOriginalParent.attach(mesh);
@@ -366,31 +322,21 @@ function putDownObject() {
         d.wireframe.material.opacity = d.originalOpacity;
         d.wireframe.material.needsUpdate = true;
       }
-      inspectedObject = null;
-      inspectedOriginalParent = null;
-    })
-    .start();
-
+      inspectedObject = null; inspectedOriginalParent = null;
+    }).start();
   const camT = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
-  new TWEEN.Tween(camT)
-    .to({ x: roomPos.x, y: roomPos.y, z: roomPos.z }, 1000)
+  new TWEEN.Tween(camT).to({ x: roomPos.x, y: roomPos.y, z: roomPos.z }, 1000)
     .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => camera.position.set(camT.x, camT.y, camT.z))
-    .start();
-
+    .onUpdate(() => camera.position.set(camT.x, camT.y, camT.z)).start();
   const tgtT = { x: controls.target.x, y: controls.target.y, z: controls.target.z };
-  new TWEEN.Tween(tgtT)
-    .to({ x: roomTarget.x, y: roomTarget.y, z: roomTarget.z }, 1000)
+  new TWEEN.Tween(tgtT).to({ x: roomTarget.x, y: roomTarget.y, z: roomTarget.z }, 1000)
     .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => controls.target.set(tgtT.x, tgtT.y, tgtT.z))
-    .start();
-
-  controls.minDistance = 0.05;
-  controls.maxDistance = 6;
+    .onUpdate(() => controls.target.set(tgtT.x, tgtT.y, tgtT.z)).start();
+  controls.minDistance = 0.05; controls.maxDistance = 6;
   currentState = State.ROOM;
 }
 
-// ─── Mouse parallax ─────────────────────────────────────────────────────────
+// ─── Parallax ────────────────────────────────────────────────────────────────
 const parallax = { x: 0, y: 0 };
 function updateParallax() {
   if (currentState !== State.ROOM) return;
@@ -403,7 +349,6 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
 });
 
 renderer.domElement.addEventListener('mousedown', () => {
@@ -415,16 +360,15 @@ window.addEventListener('mouseup', () => document.body.classList.remove('grabbin
 function animate() {
   requestAnimationFrame(animate);
   TWEEN.update();
+  updateWASD();
   updateHover();
   updateParallax();
-
   if (currentState === State.ROOM && !TWEEN.getAll().length) {
     camera.position.x += parallax.x * 0.005;
     camera.position.y += parallax.y * 0.005;
   }
-
   controls.update();
-  composer.render();
+  renderer.render(scene, camera);
 }
 
 init();
