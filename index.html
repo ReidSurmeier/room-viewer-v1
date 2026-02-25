@@ -102,15 +102,29 @@ const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; });
 window.addEventListener('keyup',   e => { keys[e.code] = false; });
 
+const vel = { fwd: 0, right: 0, up: 0 };
+const MAX_SPEED = 0.55;   // units/sec — lower = slower
+const ACCEL     = 5.0;    // how fast velocity ramps up/down (higher = snappier)
+
 function updateMovement(dt) {
   if (!controls.isLocked) return;
-  const speed = 1.8 * dt;
-  if (keys['KeyW'] || keys['ArrowUp'])    controls.moveForward(speed);
-  if (keys['KeyS'] || keys['ArrowDown'])  controls.moveForward(-speed);
-  if (keys['KeyA'] || keys['ArrowLeft'])  controls.moveRight(-speed);
-  if (keys['KeyD'] || keys['ArrowRight']) controls.moveRight(speed);
-  if (keys['KeyE'] || keys['Space'])      camera.position.y += speed;
-  if (keys['KeyQ'] || keys['ShiftLeft'])  camera.position.y -= speed;
+
+  const tFwd   = (keys['KeyW'] || keys['ArrowUp'])    ?  MAX_SPEED
+               : (keys['KeyS'] || keys['ArrowDown'])  ? -MAX_SPEED : 0;
+  const tRight = (keys['KeyD'] || keys['ArrowRight']) ?  MAX_SPEED
+               : (keys['KeyA'] || keys['ArrowLeft'])  ? -MAX_SPEED : 0;
+  const tUp    = (keys['KeyE'] || keys['Space'])       ?  MAX_SPEED
+               : (keys['KeyQ'] || keys['ShiftLeft'])   ? -MAX_SPEED : 0;
+
+  // Lerp velocity toward target — gives smooth acceleration & deceleration
+  const t = Math.min(ACCEL * dt, 1);
+  vel.fwd   += (tFwd   - vel.fwd)   * t;
+  vel.right += (tRight - vel.right) * t;
+  vel.up    += (tUp    - vel.up)    * t;
+
+  controls.moveForward(vel.fwd   * dt);
+  controls.moveRight(vel.right   * dt);
+  camera.position.y += vel.up    * dt;
 }
 
 // ─── Load GLB ────────────────────────────────────────────────────────────────
