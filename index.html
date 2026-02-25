@@ -39,6 +39,7 @@
   #crosshair::before { width: 14px; height: 1px; top: 0; left: -7px; }
   #crosshair::after  { width: 1px; height: 14px; top: -7px; left: 0; }
 </style>
+<script src="https://cdn.ably.com/lib/ably.min-2.js"></script>
 </head>
 <body>
 
@@ -168,6 +169,65 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// ─── Multiplayer (Ably) ──────────────────────────────────────────────────────
+const ABLY_KEY     = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
+const AVATAR_URL   = 'https://d2w9rnfcy7mm78.cloudfront.net/18576951/original_4b53358bc7573a623033c7ea6b192f88.jpg';
+const AVATAR_SCALE = 0.28;
+const MY_ID        = Math.random().toString(36).slice(2, 8);
+const peers        = new Map();
+let   ablyChannel  = null;
+let   lastSend     = 0;
+
+const avatarTex = new THREE.TextureLoader().load(AVATAR_URL);
+avatarTex.colorSpace = THREE.SRGBColorSpace;
+
+function addPeer(id) {
+  if (peers.has(id) || id === MY_ID) return;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: avatarTex, transparent: true, depthTest: true,
+  }));
+  sprite.scale.set(AVATAR_SCALE, AVATAR_SCALE, 1);
+  scene.add(sprite);
+  peers.set(id, sprite);
+}
+
+function removePeer(id) {
+  const s = peers.get(id);
+  if (s) { scene.remove(s); peers.delete(id); }
+}
+
+function movePeer(id, x, y, z) {
+  if (id === MY_ID) return;
+  if (!peers.has(id)) addPeer(id);
+  const s = peers.get(id);
+  if (s) s.position.set(x, y, z);
+}
+
+function publishPosition() {
+  if (!ablyChannel || !controls.isLocked) return;
+  const now = performance.now();
+  if (now - lastSend < 80) return;
+  lastSend = now;
+  ablyChannel.publish('move', { id: MY_ID,
+    x: camera.position.x, y: camera.position.y, z: camera.position.z });
+}
+
+(function initAbly() {
+  const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: MY_ID });
+  ablyChannel = ably.channels.get('room-presence');
+  ablyChannel.subscribe('move', msg => {
+    const d = msg.data;
+    movePeer(d.id, d.x, d.y, d.z);
+  });
+  ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId));
+  ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
+  ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
+  ablyChannel.presence.get((err, members) => {
+    if (!err) members.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId); });
+  });
+  ablyChannel.presence.enter();
+})();
+
 // ─── Render loop ─────────────────────────────────────────────────────────────
 let last = performance.now();
 function animate() {
@@ -176,6 +236,7 @@ function animate() {
   const dt  = Math.min((now - last) / 1000, 0.05);
   last = now;
   updateMovement(dt);
+  publishPosition();
   renderer.render(scene, camera);
 }
 
