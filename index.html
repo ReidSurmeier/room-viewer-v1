@@ -39,6 +39,7 @@
     border-radius: 4px; z-index: 20;
     image-rendering: pixelated;
     opacity: 0.85;
+    object-fit: contain;
   }
 </style>
 </head>
@@ -156,10 +157,10 @@ async function loadGIF(key) {
   const url = AVATAR_URLS[key % AVATAR_URLS.length];
 
   try {
-    // Offscreen img — NOT display:none (that stops animation) but off left edge
+    // Offscreen img — NOT display:none / opacity:0 (those stop/throttle GIF animation)
+    // No crossOrigin attr: same-origin request, and crossOrigin would taint canvas in some configs
     const img = document.createElement('img');
-    img.crossOrigin = 'anonymous';
-    img.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;pointer-events:none;';
+    img.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;';
     document.body.appendChild(img);
     await new Promise(r => { img.onload = r; img.onerror = r; img.src = url; });
     canvas.width  = img.naturalWidth  || 128;
