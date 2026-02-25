@@ -138,11 +138,13 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// ─── Animated GIF textures ────────────────────────────────────────────────
-// Native <img> → canvas → CanvasTexture: browser handles all GIF frame timing
+// ─── Animated GIF textures (ImageDecoder) ────────────────────────────────
+// ImageDecoder API: Chrome/Firefox/Edge native — decodes all frames upfront,
+// then drives playback via the main rAF loop (no setTimeout = no silent stops).
+// Safari fallback: static first frame.
 const AVATAR_URLS = Array.from({ length: 10 }, (_, i) => `avatars/avatar${i}.gif`);
 const texCache    = new Map();   // key → THREE.CanvasTexture
-const gifSources  = [];          // { img, ctx, tex } — updated each render tick
+const gifAnims    = [];          // { frames, delays, idx, nextMs, ctx, tex }
 
 async function loadGIF(key) {
   if (texCache.has(key)) return texCache.get(key);
@@ -155,22 +157,56 @@ async function loadGIF(key) {
   texCache.set(key, tex);
 
   const url = AVATAR_URLS[key % AVATAR_URLS.length];
-
   try {
-    // Offscreen img — NOT display:none / opacity:0 (those stop/throttle GIF animation)
-    // No crossOrigin attr: same-origin request, and crossOrigin would taint canvas in some configs
-    const img = document.createElement('img');
-    img.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none;';
-    document.body.appendChild(img);
-    await new Promise(r => { img.onload = r; img.onerror = r; img.src = url; });
-    canvas.width  = img.naturalWidth  || 128;
-    canvas.height = img.naturalHeight || 128;
-    ctx.drawImage(img, 0, 0);
-    tex.needsUpdate = true;
-    gifSources.push({ img, ctx, tex });
-  } catch (e) { console.warn('Avatar load failed', key, e); }
+    const buffer = await fetch(url).then(r => r.arrayBuffer());
+
+    if (typeof ImageDecoder !== 'undefined') {
+      // Decode every frame into ImageBitmaps upfront
+      const decoder = new ImageDecoder({ data: buffer, type: 'image/gif' });
+      await decoder.tracks.ready;
+      const frames = [], delays = [];
+      for (let fi = 0; ; fi++) {
+        try {
+          const { image } = await decoder.decode({ frameIndex: fi });
+          delays.push(Math.max((image.duration ?? 100000) / 1000, 20)); // µs → ms
+          frames.push(await createImageBitmap(image));
+          image.close();
+        } catch { break; }
+      }
+      if (!frames.length) throw new Error('no frames');
+      canvas.width  = frames[0].width;
+      canvas.height = frames[0].height;
+      ctx.drawImage(frames[0], 0, 0);
+      tex.needsUpdate = true;
+      // Register with rAF-driven loop — no setTimeout chain to break
+      gifAnims.push({ frames, delays, idx: 0, nextMs: performance.now() + delays[0], ctx, tex });
+    } else {
+      // Safari: static first frame via blob URL
+      const blob = URL.createObjectURL(new Blob([buffer], { type: 'image/gif' }));
+      const img  = Object.assign(new Image(), { src: blob });
+      await new Promise(r => { img.onload = r; img.onerror = r; });
+      canvas.width  = img.naturalWidth  || 128;
+      canvas.height = img.naturalHeight || 128;
+      ctx.drawImage(img, 0, 0);
+      tex.needsUpdate = true;
+    }
+  } catch (e) { console.warn('Avatar GIF failed', key, e); }
 
   return tex;
+}
+
+// Called from animate() — advances any GIF that's due for a new frame
+function tickGIFs(nowMs) {
+  for (const anim of gifAnims) {
+    if (nowMs < anim.nextMs) continue;
+    anim.idx = (anim.idx + 1) % anim.frames.length;
+    const bmp   = anim.frames[anim.idx];
+    const delay = anim.delays[anim.idx];
+    anim.ctx.clearRect(0, 0, anim.ctx.canvas.width, anim.ctx.canvas.height);
+    anim.ctx.drawImage(bmp, 0, 0);
+    anim.tex.needsUpdate = true;
+    anim.nextMs = nowMs + delay;
+  }
 }
 
 // ─── Multiplayer ─────────────────────────────────────────────────────────────
@@ -226,12 +262,7 @@ function animate() {
   const dt  = Math.min((now - last) / 1000, 0.05); last = now;
   updateMovement(dt);
   publishPos();
-  // Sync native GIF animation → canvas textures each frame
-  for (const { img, ctx, tex } of gifSources) {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.drawImage(img, 0, 0);
-    tex.needsUpdate = true;
-  }
+  tickGIFs(now); // rAF-driven GIF playback (now is already ms from performance.now)
   renderer.render(scene, camera);
 }
 animate();
