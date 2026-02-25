@@ -137,16 +137,18 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// ─── Animated GIF textures (ImageDecoder API) ─────────────────────────────
-// Falls back to static img for unsupported browsers (Safari)
+// ─── Animated GIF textures ────────────────────────────────────────────────
+// Native <img> → canvas → CanvasTexture: browser handles all GIF frame timing
 const AVATAR_URLS = Array.from({ length: 10 }, (_, i) => `avatars/avatar${i}.gif`);
 const texCache    = new Map();   // key → THREE.CanvasTexture
+const gifSources  = [];          // { img, ctx, tex } — updated each render tick
 
 async function loadGIF(key) {
   if (texCache.has(key)) return texCache.get(key);
 
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d');
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   texCache.set(key, tex);
@@ -154,54 +156,17 @@ async function loadGIF(key) {
   const url = AVATAR_URLS[key % AVATAR_URLS.length];
 
   try {
-    // Use ArrayBuffer (not stream) so ImageDecoder can seek to any frame index
-    const buffer = await fetch(url).then(r => r.arrayBuffer());
-
-    if (typeof ImageDecoder !== 'undefined') {
-      const decoder = new ImageDecoder({ data: buffer, type: 'image/gif' });
-      await decoder.tracks.ready;
-
-      // Decode ALL frames upfront into ImageBitmaps so looping is lossless
-      const frames = [];
-      let fi = 0;
-      while (true) {
-        try {
-          const { image } = await decoder.decode({ frameIndex: fi });
-          const delay  = Math.max((image.duration ?? 100000) / 1000, 20); // µs → ms
-          const bitmap = await createImageBitmap(image);
-          image.close();
-          frames.push({ bitmap, delay });
-          fi++;
-        } catch { break; }   // end of frames
-      }
-
-      if (!frames.length) throw new Error('no frames');
-
-      canvas.width  = frames[0].bitmap.width;
-      canvas.height = frames[0].bitmap.height;
-      const ctx = canvas.getContext('2d');
-      let idx = 0;
-
-      function playFrame() {
-        const { bitmap, delay } = frames[idx % frames.length];
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(bitmap, 0, 0);
-        tex.needsUpdate = true;
-        idx++;
-        setTimeout(playFrame, delay);
-      }
-      playFrame();
-
-    } else {
-      // Safari fallback — static first frame
-      const src = URL.createObjectURL(new Blob([buffer]));
-      const img = new Image();
-      img.src = src;
-      await new Promise(r => { img.onload = r; img.onerror = r; });
-      canvas.width = img.naturalWidth || 128; canvas.height = img.naturalHeight || 128;
-      canvas.getContext('2d').drawImage(img, 0, 0);
-      tex.needsUpdate = true;
-    }
+    // Offscreen img — NOT display:none (that stops animation) but off left edge
+    const img = document.createElement('img');
+    img.crossOrigin = 'anonymous';
+    img.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;pointer-events:none;';
+    document.body.appendChild(img);
+    await new Promise(r => { img.onload = r; img.onerror = r; img.src = url; });
+    canvas.width  = img.naturalWidth  || 128;
+    canvas.height = img.naturalHeight || 128;
+    ctx.drawImage(img, 0, 0);
+    tex.needsUpdate = true;
+    gifSources.push({ img, ctx, tex });
   } catch (e) { console.warn('Avatar load failed', key, e); }
 
   return tex;
@@ -260,6 +225,12 @@ function animate() {
   const dt  = Math.min((now - last) / 1000, 0.05); last = now;
   updateMovement(dt);
   publishPos();
+  // Sync native GIF animation → canvas textures each frame
+  for (const { img, ctx, tex } of gifSources) {
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.drawImage(img, 0, 0);
+    tex.needsUpdate = true;
+  }
   renderer.render(scene, camera);
 }
 animate();
