@@ -40,6 +40,7 @@
   #crosshair::after  { width: 1px; height: 14px; top: -7px; left: 0; }
 </style>
 <script src="https://cdn.ably.com/lib/ably.min-2.js"></script>
+<script src="https://unpkg.com/gifler@0.1.0/gifler.min.js"></script>
 </head>
 <body>
 
@@ -191,38 +192,24 @@ const AVATAR_URLS = [
   'avatars/avatar9.gif',
 ];
 
-// Animated GIF textures via hidden <img> + CanvasTexture
-// Browser handles GIF frame timing; we just drawImage each render frame
-const avatarImgs     = [];
-const avatarCanvases = [];
+// Animated GIF textures via gifler — fetches GIF, drives frame timing itself
 const avatarTextures = [];
 
 AVATAR_URLS.forEach(url => {
-  const img = new Image();
-  img.src = url;
-  // Keep in DOM (tiny + invisible) so browser keeps animating it
-  img.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;top:0;left:0';
-  document.body.appendChild(img);
-  avatarImgs.push(img);
-
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  avatarCanvases.push(canvas);
-
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   avatarTextures.push(tex);
+
+  // gifler fetches the GIF, parses frames, calls back with each frame
+  gifler(url).frames(canvas, (ctx, frame) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(frame.buffer, 0, 0);
+    tex.needsUpdate = true;  // tell Three.js to upload the new frame to GPU
+  });
 });
 
-function updateAvatarTextures() {
-  avatarImgs.forEach((img, i) => {
-    if (!img.naturalWidth) return;
-    const ctx = avatarCanvases[i].getContext('2d');
-    ctx.clearRect(0, 0, 128, 128);
-    ctx.drawImage(img, 0, 0, 128, 128);
-    avatarTextures[i].needsUpdate = true;
-  });
-}
+function updateAvatarTextures() { /* gifler drives updates via its own timer */ }
 
 function addPeer(id, avatarIdx = 0) {
   if (peers.has(id) || id === MY_ID) return;
