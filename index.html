@@ -6,73 +6,70 @@
 <title>Room v1</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #ffffff;
-    overflow: hidden;
-    cursor: grab;
-  }
-  body.grabbing { cursor: grabbing; }
-  body.pointing { cursor: pointer; }
+  body { background: #1a1212; overflow: hidden; }
   canvas { display: block; }
   #loading {
-    position: fixed;
-    inset: 0;
-    background: #ffffff;
-    z-index: 10;
-    transition: opacity 1.2s ease;
+    position: fixed; inset: 0; background: #fff;
+    z-index: 10; transition: opacity 1.2s ease;
   }
   #loading.fade { opacity: 0; pointer-events: none; }
-  #wasd-hint {
-    position: fixed;
-    bottom: 18px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: rgba(80,70,60,0.45);
-    font: 12px/1.6 system-ui, sans-serif;
-    letter-spacing: 0.04em;
-    pointer-events: none;
-    user-select: none;
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); z-index: 5; cursor: pointer;
   }
+  #overlay.hidden { display: none; }
+  #overlay-box {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.18);
+    padding: 36px 56px; text-align: center; color: #fff;
+    font: 13px/2.2 system-ui, sans-serif;
+    backdrop-filter: blur(10px); border-radius: 6px;
+  }
+  #overlay-box h2 { font-size: 20px; font-weight: 400; margin-bottom: 6px; letter-spacing: 0.03em; }
+  #overlay-box p  { opacity: 0.5; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  #crosshair {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none; display: none;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.75);
+  }
+  #crosshair::before { width: 14px; height: 1px; top: 0; left: -7px; }
+  #crosshair::after  { width: 1px; height: 14px; top: -7px; left: 0; }
 </style>
 </head>
 <body>
 
 <div id="loading"></div>
-<div id="wasd-hint">WASD — move &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; scroll — zoom</div>
+<div id="overlay">
+  <div id="overlay-box">
+    <h2>Click to explore</h2>
+    <p>WASD · move &nbsp;|&nbsp; Mouse · look &nbsp;|&nbsp; E / Q · up / down &nbsp;|&nbsp; ESC · exit</p>
+  </div>
+</div>
+<div id="crosshair"></div>
 
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-    "tween": "https://cdn.jsdelivr.net/npm/@tweenjs/tween.js@23.1.3/dist/tween.esm.js"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
   }
 }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import * as TWEEN from 'tween';
-
-// ─── Metadata ────────────────────────────────────────────────────────────────
-let objectMeta = {};
-
-// ─── State machine ───────────────────────────────────────────────────────────
-const State = { LOADING: 'loading', ROOM: 'room', INSPECT: 'inspect' };
-let currentState = State.LOADING;
-let inspectedObject = null;
-let inspectedOriginalPos = new THREE.Vector3();
-let inspectedOriginalParent = null;
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
 document.body.appendChild(renderer.domElement);
 
 // ─── Scene ───────────────────────────────────────────────────────────────────
@@ -80,269 +77,75 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf5efe6);
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.001, 100);
-camera.position.set(3, 2.5, 3);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.001, 300);
 
-// ─── Controls ────────────────────────────────────────────────────────────────
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.04;
-controls.minDistance = 0.05;
-controls.maxDistance = 6;
-controls.target.set(0, 0, 0);
-controls.enabled = false;
-controls.maxPolarAngle = Math.PI * 0.95;
-controls.minPolarAngle = Math.PI * 0.05;
+// ─── FPS Controls ────────────────────────────────────────────────────────────
+const controls = new PointerLockControls(camera, document.body);
+scene.add(controls.getObject());
 
-// ─── WASD Movement ───────────────────────────────────────────────────────────
-const keys = {};
-window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup',   e => { keys[e.key.toLowerCase()] = false; });
+const overlay   = document.getElementById('overlay');
+const crosshair = document.getElementById('crosshair');
 
-const _fwd   = new THREE.Vector3();
-const _right = new THREE.Vector3();
-const _up    = new THREE.Vector3(0, 1, 0);
-const _move  = new THREE.Vector3();
+overlay.addEventListener('click', () => controls.lock());
 
-function updateWASD() {
-  if (currentState !== State.ROOM) return;
-  const speed = 0.018;
-  camera.getWorldDirection(_fwd);
-  _fwd.y = 0; _fwd.normalize();
-  _right.crossVectors(_fwd, _up).normalize();
-
-  _move.set(0, 0, 0);
-  if (keys['w'] || keys['arrowup'])    _move.addScaledVector(_fwd,    1);
-  if (keys['s'] || keys['arrowdown'])  _move.addScaledVector(_fwd,   -1);
-  if (keys['a'] || keys['arrowleft'])  _move.addScaledVector(_right, -1);
-  if (keys['d'] || keys['arrowright']) _move.addScaledVector(_right,  1);
-  if (keys['e'])                       _move.addScaledVector(_up,     1);
-  if (keys['q'])                       _move.addScaledVector(_up,    -1);
-
-  if (_move.length() > 0) {
-    _move.normalize().multiplyScalar(speed);
-    camera.position.add(_move);
-    controls.target.add(_move);
-  }
-}
-
-// ─── Lighting ────────────────────────────────────────────────────────────────
-const ambient = new THREE.AmbientLight(0xfff5e8, 0.6);
-scene.add(ambient);
-const hemi = new THREE.HemisphereLight(0xfff4e0, 0xd4c8b8, 0.4);
-scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff0d4, 1.0);
-sun.position.set(-2, 3, 3);
-scene.add(sun);
-const fill = new THREE.DirectionalLight(0xe8eeff, 0.3);
-fill.position.set(3, 1, -2);
-scene.add(fill);
-const back = new THREE.DirectionalLight(0xffe8c4, 0.15);
-back.position.set(0, 2, -4);
-scene.add(back);
-
-// ─── Mouse tracking ──────────────────────────────────────────────────────────
-const mouse = { nx: 0, ny: 0 };
-window.addEventListener('mousemove', (e) => {
-  mouse.nx = (e.clientX / innerWidth) * 2 - 1;
-  mouse.ny = -(e.clientY / innerHeight) * 2 + 1;
+controls.addEventListener('lock', () => {
+  overlay.classList.add('hidden');
+  crosshair.style.display = 'block';
+});
+controls.addEventListener('unlock', () => {
+  overlay.classList.remove('hidden');
+  crosshair.style.display = 'none';
 });
 
-// ─── Raycaster ───────────────────────────────────────────────────────────────
-const raycaster = new THREE.Raycaster();
-const pickableMeshes = [];
-const allMeshData = new Map();
-let hoveredMesh = null;
+// ─── WASD ────────────────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-// ─── Room view state ─────────────────────────────────────────────────────────
-let roomPos = new THREE.Vector3();
-let roomTarget = new THREE.Vector3();
+function updateMovement(dt) {
+  if (!controls.isLocked) return;
+  const speed = 1.8 * dt;
+  if (keys['KeyW'] || keys['ArrowUp'])    controls.moveForward(speed);
+  if (keys['KeyS'] || keys['ArrowDown'])  controls.moveForward(-speed);
+  if (keys['KeyA'] || keys['ArrowLeft'])  controls.moveRight(-speed);
+  if (keys['KeyD'] || keys['ArrowRight']) controls.moveRight(speed);
+  if (keys['KeyE'] || keys['Space'])      camera.position.y += speed;
+  if (keys['KeyQ'] || keys['ShiftLeft'])  camera.position.y -= speed;
+}
 
-// ─── Load ────────────────────────────────────────────────────────────────────
+// ─── Load GLB ────────────────────────────────────────────────────────────────
 const loading = document.getElementById('loading');
 
-async function init() {
-  try {
-    const resp = await fetch('metadata.json');
-    const metaArray = await resp.json();
-    for (const m of metaArray) objectMeta[m.name] = m;
-  } catch (e) { /* no metadata */ }
+new GLTFLoader().load('room_segmented.glb', (gltf) => {
+  const root = gltf.scene;
+  const box  = new THREE.Box3().setFromObject(root);
+  const center = box.getCenter(new THREE.Vector3());
+  const size   = box.getSize(new THREE.Vector3());
+  root.position.sub(center);
 
-  const loader = new GLTFLoader();
-  loader.load('room_segmented.glb', (gltf) => {
-    const root = gltf.scene;
-    const box = new THREE.Box3().setFromObject(root);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    root.position.sub(center);
+  // Start inside, roughly at eye height
+  camera.position.set(0, size.y * 0.05, 0);
 
-    root.traverse((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      const name = child.name;
-      const meta = objectMeta[name] || {};
-      const isPickable = meta.type === 'pickable';
-      const wireStyle = meta.wireframe_style || 'medium';
-      const wireOpacity = meta.wireframe_opacity ?? 0.5;
-      const fillOpacity = meta.fill_opacity ?? 1.0;
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
 
-      const mat = new THREE.MeshLambertMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide,
-        transparent: fillOpacity < 1.0,
-        opacity: fillOpacity,
-      });
-      child.material = mat;
-
-      const edgeThreshold = wireStyle === 'wireframe_only' ? 1 :
-                            wireStyle === 'strong' ? 10 :
-                            wireStyle === 'medium' ? 15 : 25;
-      const edges = new THREE.EdgesGeometry(child.geometry, edgeThreshold);
-      const wireColor = wireStyle === 'wireframe_only' ? 0x1a1a1a : 0x2a2520;
-      const edgeMat = new THREE.LineBasicMaterial({
-        color: wireColor, transparent: true, opacity: wireOpacity,
-        depthTest: true, linewidth: 1,
-      });
-      const wireframe = new THREE.LineSegments(edges, edgeMat);
-      child.add(wireframe);
-
-      allMeshData.set(child, {
-        meta, wireframe, originalMaterial: mat, originalEdgeMat: edgeMat,
-        originalOpacity: wireOpacity, originalWireColor: wireColor, isPickable,
-      });
-      if (isPickable) pickableMeshes.push(child);
+    // MeshBasicMaterial — vertex colors only, no lighting = no distant blackout
+    child.material = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
     });
 
-    scene.add(root);
-    roomPos.set(size.x * 0.15, size.y * 0.15, size.z * 0.2);
-    roomTarget.set(-size.x * 0.1, -size.y * 0.05, -size.z * 0.15);
-    startLoadingReveal(size);
+    // Thin wireframe edge overlay
+    const edges = new THREE.EdgesGeometry(child.geometry, 15);
+    child.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color: 0x2a2520, transparent: true, opacity: 0.35, depthTest: true,
+    })));
   });
-}
 
-function startLoadingReveal(size) {
-  const startCamPos = { x: 2.5, y: 1.8, z: 2.5 };
-  const endCamPos   = { x: roomPos.x, y: roomPos.y, z: roomPos.z };
-  const startTarget = { x: 0, y: 0.5, z: 0 };
-  const endTarget   = { x: roomTarget.x, y: roomTarget.y, z: roomTarget.z };
-
-  camera.position.set(startCamPos.x, startCamPos.y, startCamPos.z);
-  controls.target.set(startTarget.x, startTarget.y, startTarget.z);
-
-  setTimeout(() => {
-    loading.classList.add('fade');
-    setTimeout(() => loading.style.display = 'none', 1300);
-  }, 300);
-
-  new TWEEN.Tween(startCamPos)
-    .to(endCamPos, 3200).easing(TWEEN.Easing.Exponential.Out)
-    .onUpdate(() => camera.position.set(startCamPos.x, startCamPos.y, startCamPos.z))
-    .start();
-
-  new TWEEN.Tween(startTarget)
-    .to(endTarget, 3200).easing(TWEEN.Easing.Exponential.Out)
-    .onUpdate(() => controls.target.set(startTarget.x, startTarget.y, startTarget.z))
-    .onComplete(() => { currentState = State.ROOM; controls.enabled = true; })
-    .start();
-}
-
-// ─── Hover ───────────────────────────────────────────────────────────────────
-function updateHover() {
-  if (currentState !== State.ROOM) return;
-  raycaster.setFromCamera({ x: mouse.nx, y: mouse.ny }, camera);
-  const intersects = raycaster.intersectObjects(pickableMeshes, false);
-  let newHover = intersects.length > 0 ? intersects[0].object : null;
-  if (newHover !== hoveredMesh) {
-    if (hoveredMesh && allMeshData.has(hoveredMesh)) {
-      const d = allMeshData.get(hoveredMesh);
-      d.wireframe.material.color.setHex(d.originalWireColor);
-      d.wireframe.material.opacity = d.originalOpacity;
-      d.wireframe.material.needsUpdate = true;
-    }
-    if (newHover && allMeshData.has(newHover)) {
-      const d = allMeshData.get(newHover);
-      d.wireframe.material.color.setHex(0x665544);
-      d.wireframe.material.opacity = Math.min(1.0, d.originalOpacity + 0.35);
-      d.wireframe.material.needsUpdate = true;
-    }
-    hoveredMesh = newHover;
-    document.body.classList.toggle('pointing', !!hoveredMesh);
-  }
-}
-
-// ─── Click ───────────────────────────────────────────────────────────────────
-window.addEventListener('click', (e) => {
-  if (currentState === State.LOADING) return;
-  if (currentState === State.INSPECT) { putDownObject(); return; }
-  if (currentState === State.ROOM && hoveredMesh) pickUpObject(hoveredMesh);
+  scene.add(root);
+  loading.classList.add('fade');
+  setTimeout(() => loading.style.display = 'none', 1300);
 });
-
-function pickUpObject(mesh) {
-  currentState = State.INSPECT;
-  inspectedObject = mesh;
-  mesh.getWorldPosition(inspectedOriginalPos);
-  const camDir = new THREE.Vector3();
-  camera.getWorldDirection(camDir);
-  const objBox = new THREE.Box3().setFromObject(mesh);
-  const objSize = objBox.getSize(new THREE.Vector3());
-  const dist = Math.max(0.3, Math.max(objSize.x, objSize.y, objSize.z) * 2.5);
-  const inspectPos = camera.position.clone().add(camDir.multiplyScalar(dist));
-  const worldPos = new THREE.Vector3();
-  mesh.getWorldPosition(worldPos);
-  const startPos = { x: worldPos.x, y: worldPos.y, z: worldPos.z };
-  const endPos   = { x: inspectPos.x, y: inspectPos.y, z: inspectPos.z };
-  inspectedOriginalParent = mesh.parent;
-  scene.attach(mesh);
-  new TWEEN.Tween(startPos).to(endPos, 800).easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => mesh.position.set(startPos.x, startPos.y, startPos.z)).start();
-  const ct = { x: controls.target.x, y: controls.target.y, z: controls.target.z };
-  new TWEEN.Tween(ct).to(endPos, 800).easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => controls.target.set(ct.x, ct.y, ct.z)).start();
-  controls.minDistance = 0.02; controls.maxDistance = 1.5;
-  if (allMeshData.has(mesh)) {
-    const d = allMeshData.get(mesh);
-    d.wireframe.material.color.setHex(0x332d28);
-    d.wireframe.material.opacity = 1.0;
-    d.wireframe.material.needsUpdate = true;
-  }
-  document.body.classList.remove('pointing');
-}
-
-function putDownObject() {
-  if (!inspectedObject) return;
-  const mesh = inspectedObject;
-  const cur = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
-  const ret = { x: inspectedOriginalPos.x, y: inspectedOriginalPos.y, z: inspectedOriginalPos.z };
-  new TWEEN.Tween(cur).to(ret, 1000).easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => mesh.position.set(cur.x, cur.y, cur.z))
-    .onComplete(() => {
-      if (inspectedOriginalParent) inspectedOriginalParent.attach(mesh);
-      if (allMeshData.has(mesh)) {
-        const d = allMeshData.get(mesh);
-        d.wireframe.material.color.setHex(d.originalWireColor);
-        d.wireframe.material.opacity = d.originalOpacity;
-        d.wireframe.material.needsUpdate = true;
-      }
-      inspectedObject = null; inspectedOriginalParent = null;
-    }).start();
-  const camT = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
-  new TWEEN.Tween(camT).to({ x: roomPos.x, y: roomPos.y, z: roomPos.z }, 1000)
-    .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => camera.position.set(camT.x, camT.y, camT.z)).start();
-  const tgtT = { x: controls.target.x, y: controls.target.y, z: controls.target.z };
-  new TWEEN.Tween(tgtT).to({ x: roomTarget.x, y: roomTarget.y, z: roomTarget.z }, 1000)
-    .easing(TWEEN.Easing.Quintic.InOut)
-    .onUpdate(() => controls.target.set(tgtT.x, tgtT.y, tgtT.z)).start();
-  controls.minDistance = 0.05; controls.maxDistance = 6;
-  currentState = State.ROOM;
-}
-
-// ─── Parallax ────────────────────────────────────────────────────────────────
-const parallax = { x: 0, y: 0 };
-function updateParallax() {
-  if (currentState !== State.ROOM) return;
-  parallax.x += (mouse.nx * 0.012 - parallax.x) * 0.03;
-  parallax.y += (mouse.ny * 0.008 - parallax.y) * 0.03;
-}
 
 // ─── Resize ──────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
@@ -351,27 +154,17 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-renderer.domElement.addEventListener('mousedown', () => {
-  if (currentState === State.ROOM && !hoveredMesh) document.body.classList.add('grabbing');
-});
-window.addEventListener('mouseup', () => document.body.classList.remove('grabbing'));
-
 // ─── Render loop ─────────────────────────────────────────────────────────────
+let last = performance.now();
 function animate() {
   requestAnimationFrame(animate);
-  TWEEN.update();
-  updateWASD();
-  updateHover();
-  updateParallax();
-  if (currentState === State.ROOM && !TWEEN.getAll().length) {
-    camera.position.x += parallax.x * 0.005;
-    camera.position.y += parallax.y * 0.005;
-  }
-  controls.update();
+  const now = performance.now();
+  const dt  = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  updateMovement(dt);
   renderer.render(scene, camera);
 }
 
-init();
 animate();
 </script>
 </body>
