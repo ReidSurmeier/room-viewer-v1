@@ -170,21 +170,40 @@ window.addEventListener('resize', () => {
 });
 
 // ─── Multiplayer (Ably) ──────────────────────────────────────────────────────
-const ABLY_KEY     = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
-const AVATAR_URL   = 'https://d2w9rnfcy7mm78.cloudfront.net/18576951/original_4b53358bc7573a623033c7ea6b192f88.jpg';
-const AVATAR_SCALE = 0.28;
-const MY_ID        = Math.random().toString(36).slice(2, 8);
-const peers        = new Map();
-let   ablyChannel  = null;
-let   lastSend     = 0;
+const ABLY_KEY    = '3_kKZA.xluPKw:KAwWxBzjQ2yb_LryDly-32d4ziQpLDwZKerNJAecybc';
+const AVATAR_SCALE = 0.08;  // small — world units
+const MY_ID       = Math.random().toString(36).slice(2, 8);
+const MY_AVATAR   = Math.floor(Math.random() * 10);  // random avatar on load
+const peers       = new Map();   // id → sprite
+let   ablyChannel = null;
+let   lastSend    = 0;
 
-const avatarTex = new THREE.TextureLoader().load(AVATAR_URL);
-avatarTex.colorSpace = THREE.SRGBColorSpace;
+const AVATAR_URLS = [
+  'https://d2w9rnfcy7mm78.cloudfront.net/29272257/original_50610dc3d356a5f42989d28fe7c87f47.gif?1720349600',
+  'https://images.are.na/eyJidWNrZXQiOiJhcmVuYV9pbWFnZXMiLCJrZXkiOiIzMDI5NDQxOS9vcmlnaW5hbF9jMTk3YzJiOGVjNmY4YzE5MjIzNTQwMzI5NDdmZGEwMy5qcGciLCJlZGl0cyI6eyJyZXNpemUiOnsid2lkdGgiOjEyMDAsImhlaWdodCI6MTIwMCwiZml0IjoiaW5zaWRlIiwid2l0aG91dEVubGFyZ2VtZW50Ijp0cnVlfSwid2VicCI6eyJxdWFsaXR5Ijo3NX0sImpwZWciOnsicXVhbGl0eSI6NzV9LCJyb3RhdGUiOm51bGx9fQ==',
+  'https://d2w9rnfcy7mm78.cloudfront.net/16305403/original_b080f6434aa818e08731feee9bcef713.gif?1651534374',
+  'https://d2w9rnfcy7mm78.cloudfront.net/32026142/original_fe72d7fa488a5b6ffaf553a747ca0813.gif?1730965071',
+  'https://d2w9rnfcy7mm78.cloudfront.net/29134777/original_3cc19ba1f32b02e2a41501da4f6012fd.gif?1719635267',
+  'https://d2w9rnfcy7mm78.cloudfront.net/14555243/original_3f70e1e3923764ac6cd88c0c7d827544.gif?1641248285',
+  'https://d2w9rnfcy7mm78.cloudfront.net/19257048/original_c5bc9a72898dc3dea7296a510a4a1ce9.gif?1670015824',
+  'https://d2w9rnfcy7mm78.cloudfront.net/10483272/original_6c20fd1a010bb5c6e5df5789483d28e8.gif?1611983047',
+  'https://d2w9rnfcy7mm78.cloudfront.net/10483263/original_ad14c37e54d177ff61996870d9973f2c.gif?1611983026',
+  'https://d2w9rnfcy7mm78.cloudfront.net/2397906/original_66432d149be60428f8d230a0b280d9a1.gif?1530927307',
+];
 
-function addPeer(id) {
+// Pre-load all avatar textures
+const loader    = new THREE.TextureLoader();
+const avatarTextures = AVATAR_URLS.map(url => {
+  const t = loader.load(url);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+});
+
+function addPeer(id, avatarIdx = 0) {
   if (peers.has(id) || id === MY_ID) return;
+  const tex    = avatarTextures[avatarIdx % avatarTextures.length];
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: avatarTex, transparent: true, depthTest: true,
+    map: tex, transparent: true, depthTest: true,
   }));
   sprite.scale.set(AVATAR_SCALE, AVATAR_SCALE, 1);
   scene.add(sprite);
@@ -196,9 +215,9 @@ function removePeer(id) {
   if (s) { scene.remove(s); peers.delete(id); }
 }
 
-function movePeer(id, x, y, z) {
+function movePeer(id, x, y, z, avatarIdx) {
   if (id === MY_ID) return;
-  if (!peers.has(id)) addPeer(id);
+  if (!peers.has(id)) addPeer(id, avatarIdx);
   const s = peers.get(id);
   if (s) s.position.set(x, y, z);
 }
@@ -208,8 +227,10 @@ function publishPosition() {
   const now = performance.now();
   if (now - lastSend < 80) return;
   lastSend = now;
-  ablyChannel.publish('move', { id: MY_ID,
-    x: camera.position.x, y: camera.position.y, z: camera.position.z });
+  ablyChannel.publish('move', {
+    id: MY_ID, av: MY_AVATAR,
+    x: camera.position.x, y: camera.position.y, z: camera.position.z,
+  });
 }
 
 (function initAbly() {
@@ -217,15 +238,17 @@ function publishPosition() {
   ablyChannel = ably.channels.get('room-presence');
   ablyChannel.subscribe('move', msg => {
     const d = msg.data;
-    movePeer(d.id, d.x, d.y, d.z);
+    movePeer(d.id, d.x, d.y, d.z, d.av ?? 0);
   });
-  ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId));
+  ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId, m.data?.av ?? 0));
   ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
   ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
   ablyChannel.presence.get((err, members) => {
-    if (!err) members.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId); });
+    if (!err) members.forEach(m => {
+      if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0);
+    });
   });
-  ablyChannel.presence.enter();
+  ablyChannel.presence.enter({ av: MY_AVATAR });
 })();
 
 // ─── Render loop ─────────────────────────────────────────────────────────────
