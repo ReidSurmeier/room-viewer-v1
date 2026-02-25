@@ -69,7 +69,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GLTFLoader }          from 'three/addons/loaders/GLTFLoader.js';
-import Ably                    from 'ably';
+// Ably loaded dynamically below — keeps scene alive if CDN is slow/unreachable
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -243,16 +243,20 @@ function publishPos() {
     x: camera.position.x, y: camera.position.y, z: camera.position.z });
 }
 
-try {
-  const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: MY_ID });
-  ablyChannel = ably.channels.get('room-presence');
-  ablyChannel.subscribe('move', msg => { const d = msg.data; movePeer(d.id, d.x, d.y, d.z, d.av ?? 0); });
-  ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId, m.data?.av ?? 0));
-  ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
-  ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
-  ablyChannel.presence.get((e, ms) => { if (!e) ms.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0); }); });
-  ablyChannel.presence.enter({ av: MY_AVATAR });
-} catch (e) { console.warn('Ably:', e); }
+// Dynamic Ably import — scene runs fine even if this fails
+import('ably').then(mod => {
+  const Ably = mod.default;
+  try {
+    const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: MY_ID });
+    ablyChannel = ably.channels.get('room-presence');
+    ablyChannel.subscribe('move', msg => { const d = msg.data; movePeer(d.id, d.x, d.y, d.z, d.av ?? 0); });
+    ablyChannel.presence.subscribe('enter',  m => addPeer(m.clientId, m.data?.av ?? 0));
+    ablyChannel.presence.subscribe('leave',  m => removePeer(m.clientId));
+    ablyChannel.presence.subscribe('absent', m => removePeer(m.clientId));
+    ablyChannel.presence.get((e, ms) => { if (!e) ms.forEach(m => { if (m.clientId !== MY_ID) addPeer(m.clientId, m.data?.av ?? 0); }); });
+    ablyChannel.presence.enter({ av: MY_AVATAR });
+  } catch (e) { console.warn('Ably init:', e); }
+}).catch(e => console.warn('Ably CDN failed (multiplayer disabled):', e));
 
 // ─── Render loop ─────────────────────────────────────────────────────────────
 let last = performance.now();
