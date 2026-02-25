@@ -149,43 +149,57 @@ async function loadGIF(key) {
   canvas.width = canvas.height = 128;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  texCache.set(key, tex);   // store immediately so duplicate calls don't double-load
+  texCache.set(key, tex);
 
   const url = AVATAR_URLS[key % AVATAR_URLS.length];
 
   try {
-    const blob = await fetch(url).then(r => r.blob());
+    // Use ArrayBuffer (not stream) so ImageDecoder can seek to any frame index
+    const buffer = await fetch(url).then(r => r.arrayBuffer());
 
     if (typeof ImageDecoder !== 'undefined') {
-      // ── Native frame-accurate GIF animation ──────────────────────────────
-      const decoder = new ImageDecoder({ data: blob.stream(), type: 'image/gif' });
+      const decoder = new ImageDecoder({ data: buffer, type: 'image/gif' });
       await decoder.tracks.ready;
-      const frameCount = decoder.tracks.selectedTrack.frameCount;
-      let fi = 0;
 
-      const ctx = canvas.getContext('2d');
-      async function nextFrame() {
+      // Decode ALL frames upfront into ImageBitmaps so looping is lossless
+      const frames = [];
+      let fi = 0;
+      while (true) {
         try {
-          const { image } = await decoder.decode({ frameIndex: fi % frameCount });
-          if (canvas.width !== image.displayWidth)  canvas.width  = image.displayWidth;
-          if (canvas.height !== image.displayHeight) canvas.height = image.displayHeight;
-          ctx.drawImage(image, 0, 0);
-          const delay = (image.duration ?? 100000) / 1000;  // microseconds → ms
+          const { image } = await decoder.decode({ frameIndex: fi });
+          const delay  = Math.max((image.duration ?? 100000) / 1000, 20); // µs → ms
+          const bitmap = await createImageBitmap(image);
           image.close();
-          tex.needsUpdate = true;
+          frames.push({ bitmap, delay });
           fi++;
-          setTimeout(nextFrame, Math.max(delay, 20));
-        } catch { fi = 0; setTimeout(nextFrame, 100); }
+        } catch { break; }   // end of frames
       }
-      nextFrame();
+
+      if (!frames.length) throw new Error('no frames');
+
+      canvas.width  = frames[0].bitmap.width;
+      canvas.height = frames[0].bitmap.height;
+      const ctx = canvas.getContext('2d');
+      let idx = 0;
+
+      function playFrame() {
+        const { bitmap, delay } = frames[idx % frames.length];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bitmap, 0, 0);
+        tex.needsUpdate = true;
+        idx++;
+        setTimeout(playFrame, delay);
+      }
+      playFrame();
 
     } else {
-      // ── Fallback: blob URL img (static first frame in Safari) ─────────────
-      const src = URL.createObjectURL(blob);
+      // Safari fallback — static first frame
+      const src = URL.createObjectURL(new Blob([buffer]));
       const img = new Image();
       img.src = src;
-      await new Promise(r => img.onload = r);
-      canvas.getContext('2d').drawImage(img, 0, 0, 128, 128);
+      await new Promise(r => { img.onload = r; img.onerror = r; });
+      canvas.width = img.naturalWidth || 128; canvas.height = img.naturalHeight || 128;
+      canvas.getContext('2d').drawImage(img, 0, 0);
       tex.needsUpdate = true;
     }
   } catch (e) { console.warn('Avatar load failed', key, e); }
